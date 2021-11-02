@@ -1,0 +1,448 @@
+<!-- 
+  web-dev4 introduces GeoJSON, the spatial data format of the web.
+  
+  1. Download and simplify School Attendance Area Boundaries
+  2. Add GeoJSON of Attendance Areas to map
+  3. Update GeoJSON Styling
+  4. Add Popups to GeoJSON
+ -->
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Web Dev 5: Web Services</title>
+    <meta
+      name="viewport"
+      content="width=device-width, 
+           initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+
+    <!-- leaflet styles -->
+    <link rel="stylesheet" href="leaflet/leaflet.css" />
+
+    <!-- leaflet js library -->
+    <script src="leaflet/leaflet.js"></script>
+    <script src="papaparse/papaparse.js"></script>
+
+    <!-- Load Esri Leaflet from CDN -->
+    <script
+      src="https://unpkg.com/esri-leaflet@3.0.3/dist/esri-leaflet.js"
+      integrity="sha512-kuYkbOFCV/SsxrpmaCRMEFmqU08n6vc+TfAVlIKjR1BPVgt75pmtU9nbQll+4M9PN2tmZSAgD1kGUCKL88CscA=="
+      crossorigin=""
+    ></script>
+    <style>
+      /* styles to create a full-screen map */
+      body {
+        padding: 0;
+        margin: 0;
+      }
+      html,
+      body,
+      #map {
+        height: 100%;
+        width: 100%;
+      }
+
+      /* panel styles */
+      #panel {
+        /* place panel in lower right corner */
+        position: fixed;
+        bottom: 2rem;
+        right: 1rem;
+        /* make sure panel is visible above map */
+        z-index: 999;
+        /* use some background texture */
+        background-image: url("images/45-degree-fabric-dark.png");
+        background-color: rgba(112, 45, 39, 0.7);
+        /* funky rounded borders */
+        border-radius: 10px 100px / 120px;
+        text-align: center;
+        color: white;
+        padding: 1.5rem;
+        width: 220px;
+      }
+
+      /* make the title big and bold */
+      .title {
+        font-weight: 600;
+        font-size: 10pt;
+        /* move it to the top of the panel */
+        margin-top: 0px;
+        /* some font fun */
+        font-family: "Trebuchet MS";
+      }
+      /* make the subtitle more subtle than title */
+      .subtitle {
+        color: rgb(209, 209, 209);
+        font-size: 8pt;
+        /* squeeze subtitle up close to title */
+        margin-top: -0.75rem;
+        /* some font fun */
+        font-family: "Trebuchet MS";
+      }
+      .info {
+        color: rgb(159, 209, 255);
+      }
+
+      /* popup styling */
+      .popupContent {
+        text-align: center;
+        line-height: 10px;
+      }
+      .popupContent img {
+        width: 250px;
+      }
+
+      /* school icon styling */
+      .school-icon {
+        background-color: rgba(255, 255, 255, 0.5);
+        border-radius: 6px;
+        padding: 1px;
+      }
+
+      /* 
+        styling for map service legend 
+        ref: https://leafletjs.com/examples/choropleth/
+      */
+      .legend {
+        line-height: 18px;
+        width: 80%;
+        text-align: left;
+        margin: 0px 54px;
+      }
+      .legend i {
+        width: 18px;
+        height: 18px;
+        float: left;
+        margin-right: 8px;
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- map container -->
+    <div id="map"></div>
+
+    <!-- floating info panel -->
+    <nav id="panel">
+      <p class="title">Web Dev 5: Web Services</p>
+      <p class="subtitle">Kris Johnson | GIS4533 | Fall 2021</p>
+      <hr />
+      <p>
+        Public schools and attendance areas in Duluth, MN, displayed over
+        population data
+      </p>
+      <p class="info">
+        Click on a school or attendance area to find out more information.
+      </p>
+      <hr />
+      <!-- this container will hold the legend -->
+      <div id="tileServiceLegend"></div>
+    </nav>
+
+    <script>
+      // webdev1
+      let map = L.map("map", { center: [46.7867, -92.1005], zoom: 11 });
+
+      const mapServiceURL =
+        "https://services.arcgis.com/8df8p0NlLFEShl0r/ArcGIS/rest/services/publish_test_feature_service/FeatureServer/0";
+
+      // call function that adds CSV data to the map
+      addCSVDataToMap();
+
+      // call function that adds GeoJSON to the map
+      addGeoJSONtoMap();
+
+      // run function that adds the legend to the service window
+      populateTileServiceLegend(mapServiceURL);
+
+      // basemaps
+      let osmBasemap = L.tileLayer(
+        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        {
+          attribution:
+            '&copy; <a href="http://' +
+            'www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }
+      );
+      let CartoDB_Positron = L.tileLayer(
+        "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        {
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+          subdomains: "abcd",
+          maxZoom: 20
+        }
+      );
+      // overlay layers
+
+      // add tile layer I published from ArcGIS Pro
+      // src: http://esri.github.io/esri-leaflet/examples/tile-layer-1.html
+      let serviceLayerOptions = {
+        url: mapServiceURL,
+        style: populationStyle,
+        fields: ["FID", "B01001e1", "Shape__Area"],
+        simplifyFactor: 0.5
+      };
+
+      let serviceLayer = L.esri.featureLayer(serviceLayerOptions);
+
+      // placeholder for geoJSON layer
+      let attendanceAreasLayer;
+
+      // add attribution for schools data
+      map.attributionControl.addAttribution(
+        'US Census, Minnesota Department of Education, Icons made by <a href="https://www.freepik.com" title="Freepik">Freepik</a> from <a href="https://www.flaticon.com/" title="Flaticon">www.flaticon.com</a>'
+      );
+
+      // add a marker to the map for each row in the CSV table
+      async function addCSVDataToMap() {
+        // get school icons
+        const icons = createIcons();
+        // get parsed CSV data as a JS array
+        const table = await parseCSV();
+        // iterate (ie. loop) over rows in table
+        for (const row of table) {
+          /*
+                   create popup content
+                   include name, address, and website
+                   bonus! include school picture in popup
+                 */
+
+          // popup content with image
+          let content_wImage = `<div class="popupContent">
+                   <p><img src="images/${row.MDENAME}.jpg"/></p>
+                   <p><b>${row.MDENAME}</b></p>
+                   <p>${row.MDEADDR}</p>
+                   <a href="${row.WEB_URL}">${row.WEB_URL}</a>
+                 </div>`;
+          // popup content without image
+          let content = `<div class="popupContent">
+                   <p><b>${row.MDENAME}</b></p>
+                   <p>${row.MDEADDR}</p>
+                   <a href="${row.WEB_URL}">${row.WEB_URL}</a>
+                 </div>`;
+
+          // array of schools for which we have images
+          const schoolWithImages = [
+            "Congdon Elementary",
+            "Denfeld High School",
+            "Ordean East Middle School"
+          ];
+
+          // check if this row (school) has an image associated with it that we
+          // could put in its popup
+          let popupContent = "";
+          if (schoolWithImages.includes(row.MDENAME)) {
+            popupContent = content_wImage;
+          } else {
+            popupContent = content;
+          }
+
+          // this could be rewritten using a ternary operater like below:
+          // let popupContent = schoolWithImages.includes(row.MDENAME)
+          //   ? content_wImage
+          //   : content;
+
+          // end popup content
+
+          // determine icon based on school type, using CLASS field
+          let schoolIcon = null;
+          // elementary (10)
+          if (row.CLASS == 10) {
+            schoolIcon = icons.elementary;
+          }
+          // middle (20)
+          else if (row.CLASS == 20) {
+            schoolIcon = icons.middle;
+          }
+          // high (32), but really just everything else
+          else {
+            schoolIcon = icons.high;
+          }
+
+          // for each row create a marker
+          // using the school's latitude and longitude
+          // and use an icon to display the school
+          let marker = L.marker([row.Lat, row.Lng], {
+            icon: schoolIcon
+          }).bindPopup(popupContent);
+          // and add it to the map
+          marker.addTo(map);
+        }
+      }
+
+      // parse raw CSV text using papa parse into a JavaScript array
+      // based on: https://stackoverflow.com/a/64982760
+      async function parseCSV() {
+        // get raw CSV text
+        const csvText = await getCSV();
+        // have papa parse it. thanks papa
+        const csvData = Papa.parse(csvText, {
+          header: true,
+          dynamicTyping: true
+        });
+        // return just the data portion
+        // !but check console.log(csvData) for errors first!
+        return csvData.data;
+      }
+
+      // fetch CSV file
+      async function getCSV() {
+        const response = await fetch("data/duluth_schools.csv");
+        // get response text
+        const data = await response.text();
+        // return the raw CSV as text
+        return data;
+      }
+      /*
+         add custom icon for schools
+         use separate icon for elementary, middle, and high school
+         ref: https://leafletjs.com/examples/custom-icons/
+       */
+      function createIcons() {
+        // create base icon class for school icons
+        const SchoolIcon = L.Icon.extend({
+          options: {
+            iconSize: [20, 20],
+            popupAnchor: [0, -10]
+          }
+        });
+        // return object with a different icon for each level of school
+        return {
+          elementary: new SchoolIcon({ iconUrl: "images/elemschool.png" }),
+          middle: new SchoolIcon({ iconUrl: "images/middleschool.png" }),
+          high: new SchoolIcon({ iconUrl: "images/highschool.png" })
+        };
+      }
+
+      /*
+         web-dev4 task 4. Add GeoJSON of Attendance Areas to map
+ 
+         1. fetch (load) local geojson
+         2. add it as a L.geoJSON layer
+       */
+
+      // add geojson to map
+      async function addGeoJSONtoMap() {
+        // local geojson file
+        const pathToGeoJSON = "data/duluth_school_attendance_areas.json";
+        // load the geojson data
+        const geojsonData = await getJSON(pathToGeoJSON);
+
+        // task 5. update styling
+        let geojsonOptions = {
+          style: geojsonStyles,
+          onEachFeature: onEachFeature
+        };
+        // add geojson to map
+        attendanceAreasLayer = L.geoJSON(geojsonData, geojsonOptions);
+
+        // after this layer is available we can add layer control to map
+        addLayerControl();
+      }
+
+      // fetch JSON file
+      // based on: http://bl.ocks.org/hpfast/2fb8de57c356d8c45ce511189eec5d6a
+      async function getJSON(url) {
+        const response = await fetch(url);
+        // get response as json
+        const data = await response.json();
+        // return the JSON data
+        return data;
+      }
+
+      // task 5. update styling
+      // style function for attendance area geojson
+      function geojsonStyles(feature) {
+        // default styles
+        let styles = {
+          color: "white",
+          opacity: 0.5,
+          fillOpacity: 0.3,
+          // random color
+          // src: https://css-tricks.com/snippets/javascript/random-hex-color/
+          fillColor: "#" + Math.floor(Math.random() * 16777215).toString(16)
+        };
+        return styles;
+      }
+
+      // task 6. add popups to geojson
+      function onEachFeature(feature, layer) {
+        // create popup content listing schools belonging to attendance area
+        let popupContent = `
+           <p class='title'>Attendance Area Schools</p>
+           <p><em>Elementary</em>: ${feature.properties.ELEM_NAME}</p>
+           <p><em>Middle</em>: ${feature.properties.MIDD_NAME}</p>
+           <p><em>High</em>: ${feature.properties.HIGH_NAME}</p>
+           `;
+        // bind popup to layer
+        layer.bindPopup(popupContent);
+      }
+
+      // src: https://leafletjs.com/examples/choropleth/
+      function populateTileServiceLegend() {
+        let legendContainer = document.getElementById("tileServiceLegend");
+        let colors = ["#e0f3db", "#a8ddb5", "#43a2ca"];
+        let classes = ["<1", "2 - 3", ">3"];
+        let unit = "people / sqkm";
+        let content = "";
+        // loop through colors and add legend icon
+        for (let i = 0; i < colors.length; i++) {
+          content += `<i style="background:${colors[i]}"></i> ${classes[i]} ${unit}<br>`;
+        }
+        // add content to legend container
+        legendContainer.innerHTML = `
+          <p class="title">Population Density, 2019</p>
+          <div class="legend">${content}</div>
+        `;
+      }
+
+      function addLayerControl() {
+        // create layer control
+        // ref: https://leafletjs.com/examples/layers-control/
+        let baseMaps = {
+          Grayscale: CartoDB_Positron,
+          Streets: osmBasemap
+        };
+        let overlayMaps = {
+          "Attendance Areas": attendanceAreasLayer,
+          "Population Density": serviceLayer
+        };
+
+        // decide which layers are going to show at the start
+        map.addLayer(CartoDB_Positron);
+        map.addLayer(serviceLayer);
+
+        // add layer control
+        L.control.layers(baseMaps, overlayMaps).addTo(map);
+      }
+
+      // layer styling for population density layer
+      function populationStyle(feature) {
+        // colors ['#e0f3db','#a8ddb5','#43a2ca']
+        // default styles
+        let style = {
+          color: "#a6a6a6",
+          weight: 1,
+          fillOpacity: 0.5
+        };
+
+        // calculate people per square kilometer
+        let popDensity =
+          feature.properties.B01001e1 /
+          feature.properties.Shape__Area /
+          1000000;
+        if (popDensity <= 1) {
+          style.fillColor = "#e0f3db";
+        } else if (popDensity > 1 && popDensity <= 3) {
+          style.fillColor = "#a8ddb5";
+        } else {
+          style.fillColor = "#43a2ca";
+        }
+
+        return style;
+      }
+    </script>
+  </body>
+</html>
